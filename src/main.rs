@@ -1,4 +1,5 @@
 extern crate num_rational;
+#[macro_use]
 extern crate nom;
 
 use num_rational::Rational32;
@@ -10,16 +11,20 @@ use nom::character::complete::multispace1;
 use nom::character::complete::not_line_ending;
 use nom::combinator::opt;
 use nom::combinator::map;
+use nom::combinator::value;
 use nom::sequence::preceded;
+use nom::sequence::delimited;
 use nom::IResult;
 
 #[derive(Debug)]
 enum PestoCommand<'a> {
-    AddIngredient {
+    Ingredient {
         amount: Rational32,
         unit: Option<&'a str>,
         ingredient: &'a str,
     },
+    Annotation(&'a str),
+    Action(&'a str),
 }
 
 fn opt_slash_num(s: &str) -> IResult<&str, Option<i32>> {
@@ -51,33 +56,57 @@ fn parse_mixed_numeral(s: &str) -> IResult<&str, Rational32> {
     }
 }
 
-fn chars_until_space(s: &str) -> IResult<&str, &str> {
-    let index = s.find(' ').unwrap_or_else(|| s.len()); // TODO so far no tabs etc
-    let (chars, rest) = s.split_at(index);
-    Ok((rest, chars))
+
+fn take_until0_str(delim: &'static str) -> impl Fn(&str) -> IResult<&str, &str> {
+    move |s| {
+        let index = s.find(delim).unwrap_or_else(|| s.len());
+        let (chars, rest) = s.split_at(index);
+        Ok((rest, chars))
+    }
 }
 
 fn parse_opt_unit(s: &str) -> IResult<&str, Option<&str>> {
-    alt((map(tag("_"), |_| None), map(chars_until_space, |s| Some(s))))(s)
+    alt((value(None, tag("_")), map(take_until0_str(" "), |s| Some(s))))(s)
 }
 
-fn parse_add_ingredient(s: &str) -> IResult<&str, PestoCommand> {
+fn parse_ingredient(s: &str) -> IResult<&str, PestoCommand> {
     let (s, _) = tag("+")(s)?;
     let (s, amount) = parse_mixed_numeral(s)?;
     let (s, _) = multispace1(s)?;
     let (s, unit) = parse_opt_unit(s)?;
     let (s, _) = multispace1(s)?;
     let (s, ingredient) = not_line_ending(s)?;
-    Ok((s, PestoCommand::AddIngredient{amount, unit, ingredient}))
+    Ok((s, PestoCommand::Ingredient{amount, unit, ingredient}))
 }
 
-fn parser(s: &str) -> IResult<&str, &str> {
+fn parse_action(s: &str) -> IResult<&str, PestoCommand> {
+    let (s, cmd_str) = delimited(tag("["), take_until0_str("]"), tag("]"))(s)?;
+    Ok((s, PestoCommand::Action(cmd_str)))
+}
+
+fn parse_annotation(s: &str) -> IResult<&str, PestoCommand> {
+    let (s, annotation_str) = delimited(tag("("), take_until0_str(")"), tag(")"))(s)?;
+    Ok((s, PestoCommand::Annotation(annotation_str)))
+}
+
+fn parser(s: &str) -> IResult<&str, Vec<PestoCommand>> {
     let (s, _) = tag("%pesto")(s)?;
-    let (s, _) = multispace1(s)?;
-    unimplemented!()
+    let mut result = Vec::new();
+    let mut rest = s;
+    while rest.len() > 0 {
+        let (s, _) = multispace1(rest)?;
+        let (s, cmd) = alt((parse_annotation, parse_action, parse_ingredient))(s)?;
+        result.push(cmd);
+        rest = s;
+    }
+    Ok((s, result))
 }
 
 fn main() {
-    let x = parse_add_ingredient("+100 g grobes Weizenmehl");
-    println!("Hello {:?}", x);
+    let mut args = std::env::args();
+    args.next(); // ignore executable name
+    let fname = args.next().expect("first arg must be the recipe to load");
+    let recipe = std::fs::read_to_string(fname).unwrap();
+    let x = parser(&recipe);
+    println!("{:?}", x.unwrap().1);
 }
