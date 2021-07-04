@@ -7,6 +7,7 @@ use num_rational::Rational32;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::digit1;
+use nom::character::complete::multispace0;
 use nom::character::complete::multispace1;
 use nom::character::complete::not_line_ending;
 use nom::combinator::opt;
@@ -25,6 +26,10 @@ enum PestoCommand<'a> {
     },
     Annotation(&'a str),
     Action(&'a str),
+    Tool(&'a str),
+    Result(&'a str),
+    Alternative(&'a str),
+    Unknown(&'a str),
 }
 
 fn opt_slash_num(s: &str) -> IResult<&str, Option<i32>> {
@@ -100,6 +105,71 @@ fn parser(s: &str) -> IResult<&str, Vec<PestoCommand>> {
         rest = s;
     }
     Ok((s, result))
+}
+
+fn quoted_str_content(s: &str) -> IResult<&str, String> {
+    let mut escaped = false;
+    let mut out = String::new();
+    for (idx, c) in s.char_indices() {
+        match c {
+            '\\' => {
+                if escaped {
+                    out.push(c);
+                    escaped = false;
+                } else {
+                    escaped = true;
+                }
+            }
+            '"' => {
+                if escaped {
+                    out.push(c);
+                    escaped = false;
+                } else {
+                    return Ok((&s[0..idx], out));
+                }
+            }
+            _ => {
+                if escaped {
+                    tag("Invalid escape")(&s[idx-1..idx+1])?;
+                    unreachable!()
+                }
+                out.push(c);
+            }
+        }
+    }
+    Ok(("", s.into()))
+}
+
+fn quoted_str(s: &str) -> IResult<&str, String> {
+    delimited(tag("\""), quoted_str_content, tag("\""))(s)
+}
+
+fn word(s: &str) -> IResult<&str, &str> {
+    let end_idx = s.char_indices().find(|(idx,c)| c.is_whitespace()).map(|(idx,c)| idx).unwrap_or(s.len());
+    if end_idx > 0 {
+        Ok((&s[end_idx..], &s[0..end_idx]))
+    } else {
+        tag("word would be empty")("")
+    }
+}
+
+fn empty_word(s: &str) -> IResult<&str, &str> {
+    let mut chars_it = s.chars();
+    let success: bool;
+    if let Some('_') = chars_it.next() {
+        if let Some(c) = chars_it.next() {
+            success = c.is_whitespace()
+        } else {
+            success = true
+        }
+    } else {
+        success = false
+    }
+    if success {
+        Ok((&s[1..], ""))
+    } else {
+        tag("not empty word")("")
+    }
 }
 
 fn main() {
