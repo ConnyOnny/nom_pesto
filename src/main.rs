@@ -18,7 +18,7 @@ use nom::sequence::preceded;
 use nom::IResult;
 
 /// MaybeOwnedString
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 enum MOS<'a> {
     Reference(&'a str),
     Owned(String),
@@ -33,13 +33,46 @@ impl<'a> AsRef<str> for MOS<'a> {
     }
 }
 
+impl<'a> std::convert::From<MOS<'a>> for String {
+    fn from(mos: MOS<'a>) -> String {
+        match mos {
+            MOS::Owned(s) => s,
+            MOS::Reference(s) => s.to_owned(),
+        }
+    }
+}
+
 impl<'a> std::fmt::Display for MOS<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.write_str(self.as_ref())
     }
 }
 
-#[derive(Debug)]
+enum PestoCommand2<T:AsRef<str>> {
+    Ingredient {
+        amount: Rational32,
+        unit: Option<T>,
+        ingredient: T,
+    },
+    Annotation(T)
+}
+
+impl<T:AsRef<str>> PestoCommand2<T> {
+    fn to_owned_string(&self) -> PestoCommand2<String> {
+        match self {
+            PestoCommand2::Annotation(s) => PestoCommand2::Annotation(s.as_ref().to_owned()),
+            PestoCommand2::Ingredient { amount, unit, ingredient } => PestoCommand2::Ingredient { amount:amount.to_owned(), unit:unit.as_ref().map(|s| s.as_ref().to_owned()), ingredient:ingredient.as_ref().to_owned()},
+        }
+    }
+}
+
+fn test() {
+    let a : String = "foo".to_owned();
+    let x1 : PestoCommand2<String> = PestoCommand2::Annotation(a.clone());
+    let x2 : PestoCommand2<&str> = PestoCommand2::Annotation(&a);
+}
+
+#[derive(Debug, Clone)]
 enum PestoCommand<'a> {
     Ingredient {
         amount: Rational32,
@@ -97,6 +130,19 @@ fn parse_opt_unit(s: &str) -> IResult<&str, Option<&str>> {
         map(take_until0_str(" "), |s| Some(s)),
     ))(s)
 }
+
+
+//fn parse_annotation_2<'a>(s: &'a[&'a str]) -> IResult<&'a[&'a str], PestoCommand<'a>> {
+fn parse_annotation_2<'outer,'inner>(s: &'outer[&'inner str]) -> IResult<&'outer[&'inner str], PestoCommand<'inner>> {
+    let text : &'inner str = s.get(0).unwrap();
+    let (text, annotation_str) = delimited(tag("("), take_until0_str(")"), tag(")"))(text.as_ref()).unwrap();
+    assert_eq!("", text);
+    Ok((
+        &s[1..],
+        PestoCommand::Annotation(annotation_str),
+    ))
+}
+
 
 fn parse_ingredient(s: &str) -> IResult<&str, PestoCommand> {
     let (s, _) = tag("+")(s)?;
@@ -267,6 +313,8 @@ fn main() {
     args.next(); // ignore executable name
     let fname = args.next().expect("first arg must be the recipe to load");
     let recipe = std::fs::read_to_string(fname).unwrap();
-    let x = parser(&recipe);
-    println!("{:?}", x.unwrap().1);
+    let strings : Vec<MOS> = qstr_tokenize(&recipe).unwrap().1;
+    let ref_strings : Vec<&str> = strings.iter().map(|mos| mos.as_ref()).collect();
+    let annotation = parse_annotation_2(&ref_strings).unwrap().1;
+    println!("{:?}", annotation);
 }
